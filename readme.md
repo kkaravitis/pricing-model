@@ -61,6 +61,13 @@ pip install jupyterlab black isort flake8
 
 ### 3  Run the pipeline
 
+You can run all scripts by running
+```powershell
+    bash run-all.sh
+```
+
+Or one by one:
+
 ```powershell
 #Ensure data directories exist
 mkdir data\raw data\processed data\models
@@ -82,6 +89,12 @@ docker-compose up -d
 python src/send_model_to_kafka.py
 
 ```
+
+After running the above python scripts, you can find both the pricing_saved_model folder and zip file under the data folder.
+
+Also, if you open your browser at localhost:9000 you can find the model bytes in  ml-model kafka topic.
+
+![](C:\dev\python\pricing-model\img\topic.png)
 
 ### 4  Freeze exact versions
 
