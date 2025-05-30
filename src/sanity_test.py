@@ -6,7 +6,7 @@ def main():
   infer = model.signatures["serving_default"]
 
   product_id = tf.constant([["p-029"]])  # shape [1, 1]
-  raw_features = tf.constant([[113, 0.41, 35.8]], dtype=tf.float32)  # shape [1, 3]
+  raw_features = tf.constant([[133, 2, 40.02]], dtype=tf.float32)  # shape [1, 3]
 
   result = infer(
     serving_default_product_id=product_id,

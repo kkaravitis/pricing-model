@@ -1,5 +1,7 @@
 # src/train.py
-import pathlib, os, tensorflow as tf
+import os
+import pathlib
+import tensorflow as tf
 import numpy as np
 import pandas as pd
 
@@ -90,11 +92,20 @@ def main():
   def serve_fn(product_id, numeric_features):
     return model([product_id, numeric_features])
 
+  concrete_fn = serve_fn.get_concrete_function()
+
   tf.saved_model.save(
     model, "../data/pricing_saved_model",
-    signatures={"serving_default": serve_fn}
+    signatures={"serving_default": concrete_fn}
   )
+
   print("\n✅ Exported to pricing_saved_model/")
+  print("📌 Input names:")
+  for input_tensor in concrete_fn.inputs:
+    print(f"  {input_tensor.name}")
+  print("📌 Output names:")
+  for output_tensor in concrete_fn.outputs:
+    print(f"  {output_tensor.name}")
 
 if __name__ == "__main__":
   os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"  # friendlier CPU perf on Windows
