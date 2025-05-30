@@ -14,10 +14,10 @@ if not hasattr(tf.data.Dataset, "from_parquet"):
 
 # ---------------- Config ----------------
 DATA_DIR = pathlib.Path("../data/processed")
-NUMERIC  = ["inventory_level", "demand", "competitor_price"]
+NUMERIC = ["inventory_level", "demand", "competitor_price"]
 EMB_SIZE = 16
-BATCH    = 256
-EPOCHS   = 30
+BATCH = 256
+EPOCHS = 30
 
 # Load scaler constants
 mean = np.load(DATA_DIR / "scaler_mean.npy")
@@ -45,13 +45,13 @@ def make_dataset(split):
 
 # ---------------- Model ----------------
 def build_model(vocab):
-  pid_in   = tf.keras.Input(shape=(1,), dtype=tf.string, name="serving_default_product_id")
+  pid_in = tf.keras.Input(shape=(1,), dtype=tf.string, name="serving_default_product_id")
   feats_in = tf.keras.Input(shape=(len(NUMERIC),), dtype=tf.float32, name="serving_default_input")
 
   # Embedding for product ID
   lookup = tf.keras.layers.StringLookup()
   lookup.adapt(vocab)
-  pid_ids  = lookup(pid_in)
+  pid_ids = lookup(pid_in)
   pid_vecs = tf.keras.layers.Embedding(input_dim=lookup.vocabulary_size(), output_dim=EMB_SIZE)(pid_ids)
   pid_vecs = tf.keras.layers.Flatten()(pid_vecs)
 
@@ -71,10 +71,26 @@ def build_model(vocab):
                 metrics=[tf.keras.metrics.MeanAbsolutePercentageError()])
   return model, lookup
 
+# ---------------- Serving Wrapper ----------------
+class ServingModel(tf.keras.Model):
+  def __init__(self, base_model):
+    super().__init__()
+    self.base_model = base_model
+
+  @tf.function(input_signature=[
+    tf.TensorSpec([None, 1], tf.string, name="serving_default_product_id"),
+    tf.TensorSpec([None, len(NUMERIC)], tf.float32, name="serving_default_input"),
+  ])
+  def serve(self, product_id, numeric_features):
+    return {"Identity": self.base_model([product_id, numeric_features])}
+
+  def call(self, inputs):
+    return self.base_model(inputs)
+
 # ---------------- Train + Export ----------------
 def main():
   ds_train = make_dataset("train")
-  ds_val   = make_dataset("val")
+  ds_val = make_dataset("val")
   vocab_ds = tf.data.Dataset.from_parquet(str(DATA_DIR / "train.parquet")).map(lambda x: x["product_id"])
   model, lookup = build_model(vocab_ds)
 
@@ -84,30 +100,29 @@ def main():
 
   model.fit(ds_train, validation_data=ds_val, epochs=EPOCHS, callbacks=callbacks)
 
-  # Export SavedModel
-  @tf.function(input_signature=[
-    tf.TensorSpec([None, 1], tf.string, name="serving_default_product_id"),
-    tf.TensorSpec([None, len(NUMERIC)], tf.float32, name="serving_default_input"),
-  ])
-  def serve_fn(product_id, numeric_features):
-    return model([product_id, numeric_features])
+  # Wrap model and export
+  serving_model = ServingModel(model)
 
-  concrete_fn = serve_fn.get_concrete_function()
+  # Force variable initialization
+  dummy_pid = tf.constant([["dummy"]])
+  dummy_feats = tf.constant([[0.0, 0.0, 0.0]])
+  _ = serving_model.serve(dummy_pid, dummy_feats)
 
   tf.saved_model.save(
-    model, "../data/pricing_saved_model",
-    signatures={"serving_default": concrete_fn}
+    serving_model,
+    "../data/pricing_saved_model",
+    signatures={"serving_default": serving_model.serve}
   )
 
   print("\n✅ Exported to pricing_saved_model/")
   print("📌 Input names:")
-  for input_tensor in concrete_fn.inputs:
+  for input_tensor in serving_model.serve.input_signature:
     print(f"  {input_tensor.name}")
   print("📌 Output names:")
-  for output_tensor in concrete_fn.outputs:
+  for output_tensor in serving_model.serve.get_concrete_function().outputs:
     print(f"  {output_tensor.name}")
 
 if __name__ == "__main__":
-  os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"  # friendlier CPU perf on Windows
+  os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
   tf.config.optimizer.set_jit(True)
   main()
