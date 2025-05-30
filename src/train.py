@@ -1,131 +1,131 @@
 # src/train.py
 import os
 import pathlib
-import tensorflow as tf
 import numpy as np
 import pandas as pd
+import tensorflow as tf
 
-# Monkey patch for from_parquet
+# ----------------------------------------------------------------------
+# 0.  Convenience: tf.data.Dataset.from_parquet for TF-2.15 (optional)
+# ----------------------------------------------------------------------
 if not hasattr(tf.data.Dataset, "from_parquet"):
   def _from_parquet(path):
     df = pd.read_parquet(pathlib.Path(path))
     return tf.data.Dataset.from_tensor_slices(dict(df))
   tf.data.Dataset.from_parquet = staticmethod(_from_parquet)
 
-# ---------------- Config ----------------
+# ----------------------------------------------------------------------
+# 1.  Configuration
+# ----------------------------------------------------------------------
 DATA_DIR = pathlib.Path("../data/processed")
-NUMERIC = ["inventory_level", "demand", "competitor_price"]
-EMB_SIZE = 16
-BATCH = 256
-EPOCHS = 30
+EXPORT_DIR = pathlib.Path("../data/pricing_saved_model")
+NUMERIC   = ["inventory_level", "demand", "competitor_price"]  # 3 columns
+EMB_SIZE  = 16
+BATCH     = 256
+EPOCHS    = 30
 
-# Load scaler constants
-mean = np.load(DATA_DIR / "scaler_mean.npy")
-scale = np.load(DATA_DIR / "scaler_scale.npy")
+# ── scaler constants (force float32 so math matches model input) ──────
+mean  = np.load(DATA_DIR / "scaler_mean.npy").astype("float32")
+scale = np.load(DATA_DIR / "scaler_scale.npy").astype("float32")
 
-# ---------------- Dataset ----------------
-def make_dataset(split):
-  file = DATA_DIR / f"{split}.parquet"
-  ds = tf.data.Dataset.from_parquet(str(file))
+# ----------------------------------------------------------------------
+# 2.  Dataset helpers
+# ----------------------------------------------------------------------
+def make_dataset(split: str) -> tf.data.Dataset:
+  """Return batched tf.data.Dataset for 'train' or 'val' parquet file."""
+  df_path = DATA_DIR / f"{split}.parquet"
+  ds = tf.data.Dataset.from_parquet(str(df_path))
 
-  def to_model_inputs(row):
-    y = row.pop("price_sold")
-    prod_id = row.pop("product_id")
-    numeric_vec = tf.stack([row.pop(col) for col in NUMERIC], axis=-1)
-    features = {
-      "serving_default_product_id": prod_id,
-      "serving_default_input": numeric_vec,
-    }
-    return features, y
+  def to_inputs(row):
+    label = row.pop("price_sold")
+    pid   = row.pop("product_id")
+    feats = tf.stack([row.pop(c) for c in NUMERIC], axis=-1)
+    return {
+             "serving_default_product_id": pid,
+             "serving_default_input":      feats
+           }, label
 
-  ds = ds.map(to_model_inputs)
+  ds = ds.map(to_inputs)
   if split == "train":
     ds = ds.shuffle(10_000)
   return ds.batch(BATCH).prefetch(tf.data.AUTOTUNE)
 
-# ---------------- Build Core Model ----------------
-def build_model(vocab):
-  pid_in = tf.keras.Input(shape=(1,), dtype=tf.string, name="serving_default_product_id")
-  feats_in = tf.keras.Input(shape=(len(NUMERIC),), dtype=tf.float32, name="serving_default_input")
+# ----------------------------------------------------------------------
+# 3.  Build Keras model
+# ----------------------------------------------------------------------
+def build_model(vocab_ds: tf.data.Dataset) -> tf.keras.Model:
+  pid_in   = tf.keras.Input(shape=(1,),           dtype=tf.string,
+                            name="serving_default_product_id")
+  feats_in = tf.keras.Input(shape=(len(NUMERIC),), dtype=tf.float32,
+                            name="serving_default_input")
 
-  # Product ID Embedding
   lookup = tf.keras.layers.StringLookup()
-  lookup.adapt(vocab)
-  pid_ids = lookup(pid_in)
-  pid_vecs = tf.keras.layers.Embedding(input_dim=lookup.vocabulary_size(), output_dim=EMB_SIZE)(pid_ids)
+  lookup.adapt(vocab_ds)
+  pid_ids  = lookup(pid_in)
+  pid_vecs = tf.keras.layers.Embedding(
+    input_dim=lookup.vocabulary_size(), output_dim=EMB_SIZE)(pid_ids)
   pid_vecs = tf.keras.layers.Flatten()(pid_vecs)
 
-  # Normalize numeric input
-  mean_const = tf.constant(mean, dtype=tf.float32)
-  scale_const = tf.constant(scale, dtype=tf.float32)
-  scaled_feats = (feats_in - mean_const) / scale_const
+  # scale numeric features
+  scaled = (feats_in - tf.constant(mean,  dtype=tf.float32)) / \
+           tf.constant(scale, dtype=tf.float32)
 
-  x = tf.keras.layers.Concatenate()([pid_vecs, scaled_feats])
+  x = tf.keras.layers.Concatenate()([pid_vecs, scaled])
   x = tf.keras.layers.Dense(64, activation="relu")(x)
   x = tf.keras.layers.Dense(32, activation="relu")(x)
   out = tf.keras.layers.Dense(1)(x)
 
-  model = tf.keras.Model(inputs=[pid_in, feats_in], outputs=out)
-  model.compile(
-    optimizer=tf.keras.optimizers.Adam(1e-3),
-    loss="mse",
-    metrics=[tf.keras.metrics.MeanAbsolutePercentageError()]
-  )
-  return model, lookup
+  model = tf.keras.Model([pid_in, feats_in], out)
+  model.compile(optimizer=tf.keras.optimizers.Adam(1e-3),
+                loss="mse",
+                metrics=[tf.keras.metrics.MeanAbsolutePercentageError()])
+  return model
 
-# ---------------- Export Wrapper ----------------
-class ServingModel(tf.Module):
-  def __init__(self, model):
-    super().__init__()
-    self.model = model
-
-  @tf.function(input_signature=[
-    tf.TensorSpec([None, 1], tf.string, name="serving_default_product_id"),
-    tf.TensorSpec([None, len(NUMERIC)], tf.float32, name="serving_default_input")
-  ])
-  def serve(self, product_id, numeric_features):
-    return {"Identity": self.model([product_id, numeric_features])}
-
-# ---------------- Main ----------------
-# ---------------- Train + Export ----------------
+# ----------------------------------------------------------------------
+# 4.  Train & export
+# ----------------------------------------------------------------------
 def main():
   ds_train = make_dataset("train")
   ds_val   = make_dataset("val")
-  vocab_ds = tf.data.Dataset.from_parquet(str(DATA_DIR / "train.parquet")).map(lambda x: x["product_id"])
-  model, lookup = build_model(vocab_ds)
+  vocab_ds = tf.data.Dataset.from_parquet(
+    str(DATA_DIR / "train.parquet")).map(lambda x: x["product_id"])
 
-  callbacks = [
-    tf.keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True)
-  ]
+  model = build_model(vocab_ds)
 
-  model.fit(ds_train, validation_data=ds_val, epochs=EPOCHS, callbacks=callbacks)
-
-  # Define serve_fn and get ConcreteFunction
-  @tf.function(input_signature=[
-    tf.TensorSpec([None, 1], tf.string, name="serving_default_product_id"),
-    tf.TensorSpec([None, len(NUMERIC)], tf.float32, name="serving_default_input"),
-  ])
-  def serve_fn(product_id, numeric_features):
-    return model([product_id, numeric_features])
-
-  concrete_fn = serve_fn.get_concrete_function()
-
-  # Export model with signature
-  tf.saved_model.save(
-    model,
-    "../data/pricing_saved_model",
-    signatures={"serving_default": concrete_fn}
+  model.fit(
+    ds_train,
+    validation_data=ds_val,
+    epochs=EPOCHS,
+    callbacks=[tf.keras.callbacks.EarlyStopping(patience=5,
+                                                restore_best_weights=True)]
   )
 
-  print("\n✅ Exported to pricing_saved_model/")
-  print("📌 Input names:")
-  for input_tensor in concrete_fn.inputs:
-    print(f"  {input_tensor.name}")
-  print("📌 Output names:")
-  for output_tensor in concrete_fn.outputs:
-    print(f"  {output_tensor.name}")
+  # ---- force variable creation with one dummy call ------------------
+  dummy_pid   = tf.constant([["dummy"]], dtype=tf.string)
+  dummy_feats = tf.constant([[0., 0., 0.]], dtype=tf.float32)
+  _ = model([dummy_pid, dummy_feats])
 
+  # ---- define explicit serving signature ---------------------------
+  @tf.function(input_signature=[
+    tf.TensorSpec([None, 1], tf.string,  name="serving_default_product_id"),
+    tf.TensorSpec([None, 3], tf.float32, name="serving_default_input")
+  ])
+  def serve(pid, feats):
+    return {"Identity": model([pid, feats])}
+
+  # ---- export SavedModel (TF-2.15 / Keras-2.15) ---------------------
+  tf.keras.models.save_model(
+    model,
+    EXPORT_DIR,
+    overwrite=True,
+    save_format="tf",
+    signatures={"serving_default": serve}
+  )
+
+  print(f"✅ Exported to {EXPORT_DIR}")
+
+# ----------------------------------------------------------------------
 if __name__ == "__main__":
-  os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
-  tf.config.optimizer.set_jit(True)
+  os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"   # friendlier CPU perf on Win
+  tf.config.optimizer.set_jit(True)          # optional XLA
   main()
