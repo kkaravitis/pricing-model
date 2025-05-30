@@ -1,3 +1,7 @@
+![Project Status](https://img.shields.io/badge/status-WIP-yellow.svg)
+
+**Work in Progress**
+
 # Pricing Recommendation Model
 
 This project trains and exports a TensorFlow model that predicts optimal prices based on product ID and real-time features.
