@@ -23,12 +23,8 @@ It is used by the pricing job project: https://github.com/kkaravitis/pricing-job
 cd pricing-model
 python -m venv venv
 
-# PowerShell
-venv\Scripts\Activate.ps1
-# cmd.exe
-# venv\Scripts\activate.bat
 # Git Bash
-# source venv/Scripts/activate
+source venv/Scripts/activate
 
 # 2  Upgrade pip / wheel
 python -m pip install --upgrade pip wheel
@@ -36,22 +32,25 @@ python -m pip install --upgrade pip wheel
 
 ### 2  Install project dependencies
 
-| Library | Version | Purpose |
-|---------|---------|---------|
-| **tensorflow** | `2.15.*` | CPU build & SavedModel |
-| **keras** | `2.15.*` | High‑level API |
+| Library | Version | Purpose                        |
+|---------|---------|--------------------------------|
+| **tensorflow** | `2.15.*` | CPU build & SavedModel         |
+| **keras** | `2.15.*` | High‑level API                 |
 | **tensorflow-io** | `0.31.*` | `tf.data.Dataset.from_parquet` |
-| **pandas**, **pyarrow** | latest | CSV ↔ Parquet I/O |
-| **scikit-learn** | latest | Scaling, train/val split |
-| **matplotlib** | latest | Optional plots |
-| **jupyterlab** | *(optional)* | Notebooks |
-| **black**, **isort**, **flake8** | *(dev)* | Code style & linting |
+| **pandas**, **pyarrow** | latest | CSV ↔ Parquet I/O              |
+| **scikit-learn** | latest | Scaling, train/val split       |
+| **matplotlib** | latest | Optional plots                 |
+| **confluent-kafka** | `2.*` | Apache Kafka client            |
+| **jupyterlab** | *(optional)* | Notebooks                      |
+| **black**, **isort**, **flake8** | *(dev)* | Code style & linting           |
+
 
 ```powershell
-pip install ^
-    "tensorflow==2.15.*" ^
-    "keras==2.15.*" ^
-    "tensorflow-io==0.31.*" ^
+pip install \
+    "tensorflow==2.15.*" \
+    "keras==2.15.*" \
+    "tensorflow-io==0.31.*" \
+    "confluent-kafka==2.*" \
     pandas pyarrow scikit-learn matplotlib
 
 # Optional developer tools
@@ -67,20 +66,20 @@ pip install jupyterlab black isort flake8
 mkdir data\raw data\processed data\models
 
 #Convert raw CSV → Parquet & build scaler *.npy
-python src\make_dataset.py
+python src/make_dataset.py
 
 # 2  Train model & export pricing_saved_model.zip
-python src\train.py
+python src/train.py
 
 # 3  Quick sanity‑check inference
-python src\sanity_test.py
+python src/sanity_test.py
 
 # 4 Compress the model to a zip file
-python src\export_savedmodel.py
+python src/export_savedmodel.py
 
 # 5 Send zip bytes to apache kafka topic
 docker-compose up -d
-python src\send_model_to_kafka.py
+python src/send_model_to_kafka.py
 
 ```
 
