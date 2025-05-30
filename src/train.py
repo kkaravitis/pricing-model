@@ -43,19 +43,19 @@ def make_dataset(split):
     ds = ds.shuffle(10_000)
   return ds.batch(BATCH).prefetch(tf.data.AUTOTUNE)
 
-# ---------------- Model ----------------
+# ---------------- Build Core Model ----------------
 def build_model(vocab):
   pid_in = tf.keras.Input(shape=(1,), dtype=tf.string, name="serving_default_product_id")
   feats_in = tf.keras.Input(shape=(len(NUMERIC),), dtype=tf.float32, name="serving_default_input")
 
-  # Embedding for product ID
+  # Product ID Embedding
   lookup = tf.keras.layers.StringLookup()
   lookup.adapt(vocab)
   pid_ids = lookup(pid_in)
   pid_vecs = tf.keras.layers.Embedding(input_dim=lookup.vocabulary_size(), output_dim=EMB_SIZE)(pid_ids)
   pid_vecs = tf.keras.layers.Flatten()(pid_vecs)
 
-  # Embed scaler constants
+  # Normalize numeric input
   mean_const = tf.constant(mean, dtype=tf.float32)
   scale_const = tf.constant(scale, dtype=tf.float32)
   scaled_feats = (feats_in - mean_const) / scale_const
@@ -66,31 +66,31 @@ def build_model(vocab):
   out = tf.keras.layers.Dense(1)(x)
 
   model = tf.keras.Model(inputs=[pid_in, feats_in], outputs=out)
-  model.compile(optimizer=tf.keras.optimizers.Adam(1e-3),
-                loss="mse",
-                metrics=[tf.keras.metrics.MeanAbsolutePercentageError()])
+  model.compile(
+    optimizer=tf.keras.optimizers.Adam(1e-3),
+    loss="mse",
+    metrics=[tf.keras.metrics.MeanAbsolutePercentageError()]
+  )
   return model, lookup
 
-# ---------------- Serving Wrapper ----------------
-class ServingModel(tf.keras.Model):
-  def __init__(self, base_model):
+# ---------------- Export Wrapper ----------------
+class ServingModel(tf.Module):
+  def __init__(self, model):
     super().__init__()
-    self.base_model = base_model
+    self.model = model
 
   @tf.function(input_signature=[
     tf.TensorSpec([None, 1], tf.string, name="serving_default_product_id"),
-    tf.TensorSpec([None, len(NUMERIC)], tf.float32, name="serving_default_input"),
+    tf.TensorSpec([None, len(NUMERIC)], tf.float32, name="serving_default_input")
   ])
   def serve(self, product_id, numeric_features):
-    return {"Identity": self.base_model([product_id, numeric_features])}
+    return {"Identity": self.model([product_id, numeric_features])}
 
-  def call(self, inputs):
-    return self.base_model(inputs)
-
+# ---------------- Main ----------------
 # ---------------- Train + Export ----------------
 def main():
   ds_train = make_dataset("train")
-  ds_val = make_dataset("val")
+  ds_val   = make_dataset("val")
   vocab_ds = tf.data.Dataset.from_parquet(str(DATA_DIR / "train.parquet")).map(lambda x: x["product_id"])
   model, lookup = build_model(vocab_ds)
 
@@ -100,26 +100,29 @@ def main():
 
   model.fit(ds_train, validation_data=ds_val, epochs=EPOCHS, callbacks=callbacks)
 
-  # Wrap model and export
-  serving_model = ServingModel(model)
+  # Define serve_fn and get ConcreteFunction
+  @tf.function(input_signature=[
+    tf.TensorSpec([None, 1], tf.string, name="serving_default_product_id"),
+    tf.TensorSpec([None, len(NUMERIC)], tf.float32, name="serving_default_input"),
+  ])
+  def serve_fn(product_id, numeric_features):
+    return model([product_id, numeric_features])
 
-  # Force variable initialization
-  dummy_pid = tf.constant([["dummy"]])
-  dummy_feats = tf.constant([[0.0, 0.0, 0.0]])
-  _ = serving_model.serve(dummy_pid, dummy_feats)
+  concrete_fn = serve_fn.get_concrete_function()
 
+  # Export model with signature
   tf.saved_model.save(
-    serving_model,
+    model,
     "../data/pricing_saved_model",
-    signatures={"serving_default": serving_model.serve}
+    signatures={"serving_default": concrete_fn}
   )
 
   print("\n✅ Exported to pricing_saved_model/")
   print("📌 Input names:")
-  for input_tensor in serving_model.serve.input_signature:
+  for input_tensor in concrete_fn.inputs:
     print(f"  {input_tensor.name}")
   print("📌 Output names:")
-  for output_tensor in serving_model.serve.get_concrete_function().outputs:
+  for output_tensor in concrete_fn.outputs:
     print(f"  {output_tensor.name}")
 
 if __name__ == "__main__":
