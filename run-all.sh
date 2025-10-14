@@ -14,5 +14,5 @@ echo "Compress the model to zip"
 python src/export_savedmodel.py
 
 echo "Send zip bytes to kafka"
-docker-compose up -d
+#docker-compose up -d
 python src/send_model_to_kafka.py
