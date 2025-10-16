@@ -8,11 +8,18 @@
 import tensorflow as tf
 
 def main():
+
+  pid = "iphone-15-pro"
+  inventory_level = 0
+  demand = 1
+  competitor_price = 0
+
+
   model = tf.saved_model.load("data/pricing_saved_model")
   infer = model.signatures["serving_default"]
 
-  product_id = tf.constant([["p-029"]])  # shape [1, 1]
-  raw_features = tf.constant([[111, 0.4, 33]], dtype=tf.float32)  # shape [1, 3]
+  product_id = tf.constant([[pid]])  # shape [1, 1]
+  raw_features = tf.constant([[inventory_level, demand, competitor_price]], dtype=tf.float32)  # shape [1, 3]
 
   result = infer(
     serving_default_product_id=product_id,

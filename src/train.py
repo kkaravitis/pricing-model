@@ -43,17 +43,28 @@ def make_dataset(split: str) -> tf.data.Dataset:
   ds = tf.data.Dataset.from_parquet(str(df_path))
 
   def to_inputs(row):
-    label = row.pop("price_sold")
-    pid   = row.pop("product_id")
-    feats = tf.stack([row.pop(c) for c in NUMERIC], axis=-1)
+    # label as float32
+    label = tf.cast(row.pop("price_sold"), tf.float32)
+    # product_id as string (usually already tf.string, but this is safe)
+    pid = row.pop("product_id")
+    pid = tf.cast(pid, tf.string)
+
+    # numeric features in a FIXED order, all cast to float32
+    feats = tf.stack(
+      [tf.cast(row.pop(c), tf.float32) for c in NUMERIC],
+      axis=-1
+    )
+
     return {
              "serving_default_product_id": pid,
-             "serving_default_input":      feats
+             "serving_default_input": feats
            }, label
 
-  ds = ds.map(to_inputs)
+  ds = ds.map(to_inputs, num_parallel_calls=tf.data.AUTOTUNE)
+
   if split == "train":
     ds = ds.shuffle(10_000)
+
   return ds.batch(BATCH).prefetch(tf.data.AUTOTUNE)
 
 # ----------------------------------------------------------------------

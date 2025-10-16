@@ -41,8 +41,8 @@ def main():
 
   # Standard-scale numeric columns
   scaler = StandardScaler().fit(train[NUMERIC])
-  for split in (train, val, test):
-    split[NUMERIC] = scaler.transform(split[NUMERIC])
+  # for split in (train, val, test):
+  #   split[NUMERIC] = scaler.transform(split[NUMERIC])
 
   # Save to Parquet (compact, typed)
   train.to_parquet(OUT_DIR / "train.parquet", index=False)
