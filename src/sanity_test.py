@@ -11,7 +11,7 @@ def main():
 
   pid = "iphone-15-pro"
   inventory_level = 0
-  demand = 1
+  demand = 0
   competitor_price = 0
 
 
