@@ -7,13 +7,17 @@
 
 from confluent_kafka import Producer
 import pathlib
+import os
 
 # --- Config ---
-BROKER = "localhost:9092"           # Change to your broker URL
-TOPIC  = "ml-model"
+BROKER = os.getenv("KAFKA_BROKER", "localhost:9092")
+TOPIC  = os.getenv("KAFKA_TOPIC", "ml-model")
 ZIP_FILE = pathlib.Path("data/pricing_saved_model.zip")
 
 # --- Load model as bytes ---
+if not ZIP_FILE.exists():
+  raise FileNotFoundError(f"Model artifact not found: {ZIP_FILE}")
+
 with open(ZIP_FILE, "rb") as f:
   payload = f.read()
 
@@ -24,8 +28,8 @@ producer = Producer({"bootstrap.servers": BROKER})
 producer.produce(
   TOPIC,
   value=payload,
-  key="pricing-model-v1"           # optional key (for partitioning)
+  key="pricing-model"
 )
 
 producer.flush()
-print(f"✅ Sent {ZIP_FILE.name} to Kafka topic '{TOPIC}'")
+print(f"✅ Sent {ZIP_FILE.name} to Kafka topic '{TOPIC}' via broker '{BROKER}'")
