@@ -8,6 +8,29 @@ This project trains and exports a TensorFlow model that predicts optimal prices 
 
 It is used by the pricing job project: https://github.com/kkaravitis/pricing-job 
 
+## Quick Start
+
+First of all, you should have followed the instructions in quick start guide of the pricing-api project from here
+
+https://github.com/kkaravitis/pricing-api?tab=readme-ov-file#quick-start
+
+Build the docker image by executing:
+```bash
+docker build . -t pricing-model:latest
+```
+
+start the pricing-model docker compose service by executing
+```bash
+docker-compose up -d
+```
+
+After you ensure that all the infrastructure services, the pricing-api and the pricing-model services are up and running you can send the zipped ML model to the ml-model kafka topic by calling the rest api like below:  
+
+```bash
+curl -i -X POST http://localhost:7070/pipeline/run
+```
+ and you can verify it by navigating to http://localhost:9001 and see the contents of the ml-model kafka topic. 
+
 ## 🚀 Features
 
 - TensorFlow 2.x with embedded scaler
